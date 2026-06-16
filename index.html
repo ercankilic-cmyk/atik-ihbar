@@ -85,6 +85,7 @@
   .view{display:none}.view.on{display:block}
   @media(max-width:560px){.stats{grid-template-columns:repeat(2,1fr)}.card{grid-template-columns:70px 1fr}.card .thumb,.card .noimg{width:70px;height:70px}}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 <div class="wrap">
@@ -164,6 +165,13 @@
 <script>
 const $=id=>document.getElementById(id);
 const KEY="ihbar_v1";
+const SB=window.supabase.createClient("https://xobvyvhmethgoparfjvm.supabase.co","sb_publishable_HKXI9gkBNQGUo6Ds_GO31g_tppPTDCo");
+let DATA=[];
+function mapRow(x){return {id:x.id,no:x.no,turKey:x.turkey,birimKey:x.birimkey,yer:x.yer,lat:x.lat,lng:x.lng,aciklama:x.aciklama,foto:x.foto,durum:x.durum,atanan:x.atanan,tarih:x.tarih};}
+async function refresh(){
+  try{const {data,error}=await SB.from("ihbarlar").select("*").order("tarih",{ascending:false});if(error)throw error;DATA=(data||[]).map(mapRow);}catch(e){}
+  renderMy();renderDash();
+}
 let L=localStorage.getItem("ihbar_lang")||"tr";
 
 const BIRIM=[
@@ -234,7 +242,7 @@ const turName=k=>{const o=TUR.find(x=>x.k===k);return o?o[L]:k;};
 
 let photoData=null, geo=null;
 
-function load(){try{return JSON.parse(localStorage.getItem(KEY))||[]}catch(e){return[]}}
+function load(){return DATA;}
 function save(a){try{localStorage.setItem(KEY,JSON.stringify(a));return true}catch(e){return false}}
 
 function setLang(l){L=l;localStorage.setItem("ihbar_lang",l);applyLang();}
@@ -263,7 +271,7 @@ function setRole(r){
   $("view-gorevli").classList.toggle("on",r==="gorevli");
   $("rb-v").classList.toggle("on",r==="vatandas");
   $("rb-g").classList.toggle("on",r==="gorevli");
-  if(r==="vatandas")renderMy();else renderDash();
+  refresh();
   window.scrollTo({top:0,behavior:"smooth"});
 }
 
@@ -288,20 +296,21 @@ function getLoc(){
     ()=>{$("geoVal").textContent=t("geo_fail");});
 }
 
-function submitReport(){
+async function submitReport(){
   const yer=$("yer").value.trim();
   if(!yer){alert(t("err_yer"));$("yer").focus();return;}
-  const list=load();
-  const no="İH-"+String(list.length+1).padStart(4,"0");
-  const rec={id:Date.now(),no,turKey:$("tur").value,birimKey:$("birim").value,yer,
+  const birim=$("birim").value;
+  const no="İH-"+String(DATA.length+1).padStart(4,"0");
+  const payload={no,turkey:$("tur").value,birimkey:birim,yer,
     lat:geo?geo.lat:null,lng:geo?geo.lng:null,aciklama:$("aciklama").value.trim(),
     foto:photoData,durum:"bildirildi",atanan:"",tarih:new Date().toISOString()};
-  list.unshift(rec);
-  if(!save(list)){rec.foto=null;list[0]=rec;if(!save(list)){alert(t("err_save"));return;}flash(t("msg_nophoto"));}
-  else{flash(t("msg_ok").replace("{no}",no).replace("{birim}",birimName(rec.birimKey)));}
+  let res=await SB.from("ihbarlar").insert(payload);
+  if(res.error&&photoData){payload.foto=null;res=await SB.from("ihbarlar").insert(payload);if(!res.error)flash(t("msg_nophoto"));}
+  else if(!res.error){flash(t("msg_ok").replace("{no}",no).replace("{birim}",birimName(birim)));}
+  if(res.error){alert(t("err_save"));return;}
   $("yer").value="";$("aciklama").value="";photoData=null;geo=null;
   $("photoPrev").style.display="none";$("photoEmpty").style.display="block";$("photoInput").value="";$("geoVal").textContent="—";
-  renderMy();
+  await refresh();
 }
 function flash(msg){const m=$("okMsg");m.innerHTML="✓ "+msg;m.classList.add("show");m.scrollIntoView({behavior:"smooth",block:"center"});}
 
@@ -342,9 +351,9 @@ function renderDash(){
   const f=list.filter(r=>(!fb||r.birimKey===fb)&&(!fd||r.durum===fd));
   $("dashList").innerHTML=f.length?f.map(r=>card(r,true)).join(""):`<div class="empty">${t("dashEmpty")}</div>`;
 }
-function setStatus(id,s){const l=load();const r=l.find(x=>x.id===id);if(r){r.durum=s;save(l);renderDash();renderMy();}}
-function assign(id){const l=load();const r=l.find(x=>x.id===id);if(!r)return;const n=prompt(t("assign_p"),r.atanan||"");if(n!==null){r.atanan=n.trim();if(r.durum==="bildirildi"&&r.atanan)r.durum="islemde";save(l);renderDash();}}
-function seedDemo(){
+async function setStatus(id,s){await SB.from("ihbarlar").update({durum:s}).eq("id",id);await refresh();}
+async function assign(id){const r=DATA.find(x=>x.id===id);if(!r)return;const n=prompt(t("assign_p"),r.atanan||"");if(n===null)return;const atanan=n.trim();const upd={atanan};if(r.durum==="bildirildi"&&atanan)upd.durum="islemde";await SB.from("ihbarlar").update(upd).eq("id",id);await refresh();}
+async function seedDemo(){
   const now=Date.now();
   const S=[
     {yer:"Bağdat Cad. otobüs durağı yanı",turKey:"cop",birimKey:"temizlik",durum:"cozuldu",atanan:"Ahmet Y.",aciklama:"Durak yanında çöp birikmiş",h:26},
@@ -353,13 +362,15 @@ function seedDemo(){
     {yer:"Atatürk Bulvarı 25 No",turKey:"konteyner",birimKey:"temizlik",durum:"bildirildi",atanan:"",aciklama:"Konteyner taşmış",h:1},
     {yer:"Liman Cad. eski fabrika",turKey:"tehlikeli",birimKey:"cevre",durum:"islemde",atanan:"Çevre Ekibi",aciklama:"Terk edilmiş variller",h:14},
   ];
-  const list=load();
-  S.forEach((s,i)=>{ list.push({id:now+i,no:"İH-"+String(list.length+1).padStart(4,"0"),turKey:s.turKey,birimKey:s.birimKey,yer:s.yer,lat:null,lng:null,aciklama:s.aciklama,foto:null,durum:s.durum,atanan:s.atanan,tarih:new Date(now-s.h*3600000).toISOString()}); });
-  save(list);renderDash();renderMy();
+  const rows=S.map((s,i)=>({no:"İH-"+String(i+1).padStart(4,"0"),turkey:s.turKey,birimkey:s.birimKey,yer:s.yer,lat:null,lng:null,aciklama:s.aciklama,foto:null,durum:s.durum,atanan:s.atanan,tarih:new Date(now-s.h*3600000).toISOString()}));
+  await SB.from("ihbarlar").insert(rows);
+  await refresh();
 }
-function clearAll(){if(confirm(t("clear_c"))){save([]);renderDash();renderMy();}}
+async function clearAll(){if(confirm(t("clear_c"))){await SB.from("ihbarlar").delete().gt("id",0);await refresh();}}
 
 applyLang();
+refresh();
+setInterval(function(){try{if($("view-gorevli").classList.contains("on"))refresh();}catch(e){}},12000);
 </script>
 </body>
 </html>
